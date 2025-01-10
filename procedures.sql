@@ -14,19 +14,39 @@ CREATE OR ALTER PROCEDURE sp_ThemSanPham
 AS
 BEGIN
     BEGIN TRY
+        BEGIN TRANSACTION;
+        SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
         DECLARE @MaSP INT;
         SELECT @MaSP = ISNULL(MAX(MaSP), 0) + 1 FROM SANPHAM;
 
-        INSERT INTO SANPHAM (MaSP, TenSP, MoTa, GiaNiemYet, SLToiDa, SLTonKho, DonVi, NgayThem, NgayCapNhat, MaDM, MaNSX)
-        VALUES (@MaSP, @TenSP, @MoTa, @GiaNiemYet, @SLToiDa, @SLTonKho, @DonVi, GETDATE(), GETDATE(), @MaDM, @MaNSX);
+        IF NOT EXISTS (
+            SELECT 1 
+            FROM SANPHAM WITH (ROWLOCK, UPDLOCK) 
+            WHERE TenSP = @TenSP AND MaDM = @MaDM AND MaNSX = @MaNSX
+        )
+        BEGIN
+            INSERT INTO SANPHAM (
+                MaSP, TenSP, MoTa, GiaNiemYet, SLToiDa, SLTonKho, DonVi, NgayThem, NgayCapNhat, MaDM, MaNSX
+            )
+            VALUES (
+                @MaSP, @TenSP, @MoTa, @GiaNiemYet, @SLToiDa, @SLTonKho, @DonVi, GETDATE(), GETDATE(), @MaDM, @MaNSX
+            );
 
-        PRINT N'Sản phẩm mới đã được thêm vào thành công.';
+            PRINT N'Sản phẩm mới đã được thêm vào thành công.';
+        END
+        ELSE
+        BEGIN
+            PRINT N'Sản phẩm đã tồn tại trong hệ thống.';
+        END
+
+        COMMIT TRANSACTION;
     END TRY
     BEGIN CATCH
-        PRINT ERROR_MESSAGE();
-    END CATCH
-END
+        ROLLBACK TRANSACTION;
+        PRINT N'Lỗi khi thêm sản phẩm: ' + ERROR_MESSAGE();
+    END CATCH;
+END;
 GO
 
 ----------------------------- sp_ThemKhuyenMai -------------------------------------
@@ -43,34 +63,61 @@ CREATE OR ALTER PROCEDURE sp_ThemKhuyenMai
 AS
 BEGIN
     BEGIN TRY
+        BEGIN TRANSACTION;
+        SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
         DECLARE @MaKhuyenMai INT;
-        SELECT @MaKhuyenMai = ISNULL(MAX(MaKhuyenMai), 0) + 1 FROM KHUYENMAI;
+        SELECT @MaKhuyenMai = ISNULL(MAX(MaKhuyenMai), 0) + 1 
+        FROM KHUYENMAI WITH (ROWLOCK);
 
-        INSERT INTO KHUYENMAI (MaKhuyenMai, NgayBatDau, NgayKetThuc, NgayTaoMaKM, TiLe, SLToiDa, TinhTrang, SLDaBan, LoaiKM, MaNV)
-        VALUES (@MaKhuyenMai, @NgayBatDau, @NgayKetThuc, GETDATE(), @TiLe, @SLToiDa, N'Đang diễn ra', 0, @LoaiKM, @MaNV);
+        IF (@LoaiKM = 'Combo-sale' OR @LoaiKM = 'Flash-sale') AND @MaSP1 IS NOT NULL
+        BEGIN
+            DECLARE @SLTonKho INT;
 
-        IF @LoaiKM = N'Combo-sale'
+            SELECT @SLTonKho = SLTonKho
+            FROM SANPHAM WITH (ROWLOCK)
+            WHERE MaSP = @MaSP1;
+
+            IF @SLToiDa > @SLTonKho
+            BEGIN
+                PRINT N'Số lượng tối đa của khuyến mãi vượt quá số lượng tồn kho.';
+                ROLLBACK TRANSACTION;
+                RETURN;
+            END
+        END
+
+        INSERT INTO KHUYENMAI (
+            MaKhuyenMai, NgayBatDau, NgayKetThuc, NgayTaoMaKM, TiLe, SLToiDa, TinhTrang, SLDaBan, LoaiKM, MaNV
+        )
+        VALUES (
+            @MaKhuyenMai, @NgayBatDau, @NgayKetThuc, GETDATE(), @TiLe, @SLToiDa, N'Đang diễn ra', 0, @LoaiKM, @MaNV
+        );
+
+        IF @LoaiKM = 'Combo-sale'
         BEGIN
             INSERT INTO COMBOSALE (MaKhuyenMai, MaSP1, MaSP2)
             VALUES (@MaKhuyenMai, @MaSP1, @MaSP2);
         END
-        ELSE IF @LoaiKM = N'Member-sale'
+        ELSE IF @LoaiKM = 'Member-sale'
         BEGIN
             INSERT INTO MEMBERSALE (MaKhuyenMai, MaPH)
             VALUES (@MaKhuyenMai, @MaPH);
         END
-        ELSE IF @LoaiKM = N'Flash-sale'
+        ELSE IF @LoaiKM = 'Flash-sale'
         BEGIN
             INSERT INTO FLASHSALE (MaKhuyenMai, MaSP)
             VALUES (@MaKhuyenMai, @MaSP1);
-        END;
+        END
 
-        PRINT N'Chương trình khuyến mãi đã được thêm thành công.';
+        PRINT N'Khuyến mãi mới đã được thêm vào thành công.';
+
+        COMMIT TRANSACTION;
     END TRY
     BEGIN CATCH
-        PRINT ERROR_MESSAGE();
-    END CATCH
-END
+        ROLLBACK TRANSACTION;
+        PRINT N'Lỗi khi thêm khuyến mãi: ' + ERROR_MESSAGE();
+    END CATCH;
+END;
 GO
 
 ----------------------------- sp_TaoFlashSale -------------------------------------
@@ -127,6 +174,7 @@ BEGIN
     END CATCH
 END
 GO
+
 ----------- BỘ PHẬN XỬ LÝ ĐƠN HÀNG
 ----------- BỘ PHẬN KINH DOANH
 
