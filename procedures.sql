@@ -1,6 +1,132 @@
 
 ----------- BỘ PHẬN CHĂM SÓC KHÁCH HÀNG
 ----------- BỘ PHẬN QUẢN LÝ NGÀNH HÀNG
+----------------------------- sp_ThemSanPham -------------------------------------
+CREATE OR ALTER PROCEDURE sp_ThemSanPham
+    @MaDM INT,
+    @MaNSX INT,
+    @TenSP NVARCHAR(255),
+    @MoTa TEXT,
+    @GiaNiemYet INT,
+    @SLToiDa INT,
+    @SLTonKho INT,
+    @DonVi NVARCHAR(255)
+AS
+BEGIN
+    BEGIN TRY
+
+        DECLARE @MaSP INT;
+        SELECT @MaSP = ISNULL(MAX(MaSP), 0) + 1 FROM SANPHAM;
+
+        INSERT INTO SANPHAM (MaSP, TenSP, MoTa, GiaNiemYet, SLToiDa, SLTonKho, DonVi, NgayThem, NgayCapNhat, MaDM, MaNSX)
+        VALUES (@MaSP, @TenSP, @MoTa, @GiaNiemYet, @SLToiDa, @SLTonKho, @DonVi, GETDATE(), GETDATE(), @MaDM, @MaNSX);
+
+        PRINT N'Sản phẩm mới đã được thêm vào thành công.';
+    END TRY
+    BEGIN CATCH
+        PRINT ERROR_MESSAGE();
+    END CATCH
+END
+GO
+
+----------------------------- sp_ThemKhuyenMai -------------------------------------
+CREATE OR ALTER PROCEDURE sp_ThemKhuyenMai
+    @NgayBatDau DATETIME,
+    @NgayKetThuc DATETIME,
+    @TiLe FLOAT,
+    @SLToiDa INT,
+    @LoaiKM NVARCHAR(15),
+    @MaSP1 INT = NULL,
+    @MaSP2 INT = NULL,
+    @MaPH INT = NULL,
+    @MaNV INT
+AS
+BEGIN
+    BEGIN TRY
+        DECLARE @MaKhuyenMai INT;
+        SELECT @MaKhuyenMai = ISNULL(MAX(MaKhuyenMai), 0) + 1 FROM KHUYENMAI;
+
+        INSERT INTO KHUYENMAI (MaKhuyenMai, NgayBatDau, NgayKetThuc, NgayTaoMaKM, TiLe, SLToiDa, TinhTrang, SLDaBan, LoaiKM, MaNV)
+        VALUES (@MaKhuyenMai, @NgayBatDau, @NgayKetThuc, GETDATE(), @TiLe, @SLToiDa, N'Đang diễn ra', 0, @LoaiKM, @MaNV);
+
+        IF @LoaiKM = N'Combo-sale'
+        BEGIN
+            INSERT INTO COMBOSALE (MaKhuyenMai, MaSP1, MaSP2)
+            VALUES (@MaKhuyenMai, @MaSP1, @MaSP2);
+        END
+        ELSE IF @LoaiKM = N'Member-sale'
+        BEGIN
+            INSERT INTO MEMBERSALE (MaKhuyenMai, MaPH)
+            VALUES (@MaKhuyenMai, @MaPH);
+        END
+        ELSE IF @LoaiKM = N'Flash-sale'
+        BEGIN
+            INSERT INTO FLASHSALE (MaKhuyenMai, MaSP)
+            VALUES (@MaKhuyenMai, @MaSP1);
+        END;
+
+        PRINT N'Chương trình khuyến mãi đã được thêm thành công.';
+    END TRY
+    BEGIN CATCH
+        PRINT ERROR_MESSAGE();
+    END CATCH
+END
+GO
+
+----------------------------- sp_TaoFlashSale -------------------------------------
+CREATE OR ALTER PROCEDURE sp_TaoFlashSale
+    @MaKM INT,
+    @MaSP INT
+AS
+BEGIN
+    BEGIN TRY
+        INSERT INTO FLASHSALE (MaKhuyenMai, MaSP)
+        VALUES (@MaKM, @MaSP);
+
+        PRINT N'Flash Sale đã được tạo thành công.';
+    END TRY
+    BEGIN CATCH
+        PRINT ERROR_MESSAGE();
+    END CATCH
+END
+GO
+
+----------------------------- sp_TaoComboSale -------------------------------------
+CREATE OR ALTER PROCEDURE sp_TaoComboSale
+    @MaKM INT,
+    @MaSP1 INT,
+    @MaSP2 INT
+AS
+BEGIN
+    BEGIN TRY
+        INSERT INTO COMBOSALE (MaKhuyenMai, MaSP1, MaSP2)
+        VALUES (@MaKM, @MaSP1, @MaSP2);
+
+        PRINT N'Combo Sale đã được tạo thành công.';
+    END TRY
+    BEGIN CATCH
+        PRINT ERROR_MESSAGE();
+    END CATCH
+END
+GO
+
+----------------------------- sp_TaoMemberSale -------------------------------------
+CREATE OR ALTER PROCEDURE sp_TaoMemberSale
+    @MaKM INT,
+    @MaPH INT
+AS
+BEGIN
+    BEGIN TRY
+        INSERT INTO MEMBERSALE (MaKhuyenMai, MaPH)
+        VALUES (@MaKM, @MaPH);
+
+        PRINT N'Member Sale đã được tạo thành công.';
+    END TRY
+    BEGIN CATCH
+        PRINT ERROR_MESSAGE();
+    END CATCH
+END
+GO
 ----------- BỘ PHẬN XỬ LÝ ĐƠN HÀNG
 ----------- BỘ PHẬN KINH DOANH
 
