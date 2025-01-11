@@ -4,7 +4,8 @@ GO
 --Liet ke san pham theo sl ban
 CREATE OR ALTER PROCEDURE sp_LietKeSanPhamTheoSoLuongBan(
     @NgayBatDau DATETIME,
-    @NgayKetThuc DATETIME)
+    @NgayKetThuc DATETIME
+)
 AS
 BEGIN
     -- Bắt đầu giao dịch
@@ -24,9 +25,9 @@ BEGIN
         CT.MaSP,
         SP.TenSP,
         SUM(CT.SoLuong) AS SoLuongBan
-    FROM DonHang DH WITH (HOLDLOCK)
-    INNER JOIN CTDonHang CT WITH (HOLDLOCK) ON DH.MaDH = CT.MaDH
-    INNER JOIN SanPham SP ON CT.MASP = SP.MaSP 
+    FROM DonHang DH
+    INNER JOIN CTDonHang CT ON DH.MaDH = CT.MaDH
+    INNER JOIN SanPham SP ON CT.MaSP = SP.MaSP 
     WHERE DH.NgayGiao BETWEEN @NgayBatDau AND @NgayKetThuc
     GROUP BY CT.MaSP, SP.TenSP;
 
@@ -35,12 +36,13 @@ BEGIN
     FROM #DanhSachSanPham
     ORDER BY SoLuongBan DESC;
 
-    -- Xóa bảng tạm
+    -- Xóa bảng tạm sau khi lấy kết quả
     DROP TABLE #DanhSachSanPham;
 
     -- Kết thúc giao dịch
     COMMIT;
 END;
+
 
 EXEC sp_LietKeSanPhamTheoSoLuongBan @NgayBatDau = '2024-01-01',@NgayKetThuc = '2025-01-01'
 
@@ -150,6 +152,4 @@ BEGIN
 END;
 
 exec sp_ThongKeTatCacSanPhamTheoNgay @Ngay = '2024-08-01'
-
-
 
