@@ -138,9 +138,6 @@ BEGIN
         BEGIN TRANSACTION;
         SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
 
-        DECLARE @MaSP INT;
-        SELECT @MaSP = ISNULL(MAX(MaSP), 0) + 1 FROM SANPHAM;
-
         IF NOT EXISTS (
             SELECT 1 
             FROM SANPHAM WITH (ROWLOCK, UPDLOCK) 
@@ -148,10 +145,10 @@ BEGIN
         )
         BEGIN
             INSERT INTO SANPHAM (
-                MaSP, TenSP, MoTa, GiaNiemYet, SLToiDa, SLTonKho, DonVi, NgayThem, NgayCapNhat, MaDM, MaNSX
+                TenSP, MoTa, GiaNiemYet, SLToiDa, SLTonKho, DonVi, NgayThem, NgayCapNhat, MaDM, MaNSX
             )
             VALUES (
-                @MaSP, @TenSP, @MoTa, @GiaNiemYet, @SLToiDa, @SLTonKho, @DonVi, GETDATE(), GETDATE(), @MaDM, @MaNSX
+                @TenSP, @MoTa, @GiaNiemYet, @SLToiDa, @SLTonKho, @DonVi, GETDATE(), GETDATE(), @MaDM, @MaNSX
             );
 
             PRINT N'Sản phẩm mới đã được thêm vào thành công.';
@@ -171,26 +168,21 @@ END;
 GO
 
 ----------------------------- sp_ThemKhuyenMai -------------------------------------
-GO
 CREATE OR ALTER PROCEDURE sp_ThemKhuyenMai
-    @NgayBatDau DATETIME,
-    @NgayKetThuc DATETIME,
-    @TiLe FLOAT,
-    @SLToiDa INT,
-    @LoaiKM NVARCHAR(15),
-    @MaSP1 INT = NULL,
-    @MaSP2 INT = NULL,
-    @MaPH INT = NULL,
-    @MaNV INT
+    @NgayBatDau DATETIME,     
+    @NgayKetThuc DATETIME,    
+    @TiLe FLOAT,              
+    @SLToiDa INT,              
+    @LoaiKM NVARCHAR(15),      
+    @MaSP1 INT = NULL,         
+    @MaSP2 INT = NULL,         
+    @MaPH INT = NULL,        
+    @MaNV INT                 
 AS
 BEGIN
     BEGIN TRY
         BEGIN TRANSACTION;
         SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-
-        DECLARE @MaKhuyenMai INT;
-        SELECT @MaKhuyenMai = ISNULL(MAX(MaKhuyenMai), 0) + 1 
-        FROM KHUYENMAI WITH (ROWLOCK);
 
         IF (@LoaiKM = 'Combo-sale' OR @LoaiKM = 'Flash-sale') AND @MaSP1 IS NOT NULL
         BEGIN
@@ -209,11 +201,14 @@ BEGIN
         END
 
         INSERT INTO KHUYENMAI (
-            MaKhuyenMai, NgayBatDau, NgayKetThuc, NgayTaoMaKM, TiLe, SLToiDa, TinhTrang, SLDaBan, LoaiKM, MaNV
+            NgayBatDau, NgayKetThuc, NgayTaoMaKM, TiLe, SLToiDa, TinhTrang, SLDaBan, LoaiKM, MaNV
         )
         VALUES (
-            @MaKhuyenMai, @NgayBatDau, @NgayKetThuc, GETDATE(), @TiLe, @SLToiDa, N'Đang diễn ra', 0, @LoaiKM, @MaNV
+            @NgayBatDau, @NgayKetThuc, GETDATE(), @TiLe, @SLToiDa, N'Đang diễn ra', 0, @LoaiKM, @MaNV
         );
+
+        DECLARE @MaKhuyenMai INT;
+        SELECT @MaKhuyenMai = SCOPE_IDENTITY();
 
         IF @LoaiKM = 'Combo-sale'
         BEGIN
