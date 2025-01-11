@@ -838,7 +838,7 @@ GO
 
 ------------------------ LÁT NHỚ XÓA NHÉ --------------------------
 ------------------------ 1 PHAN sp_TaoDonHang --------------------------
-CREATE OR ALTER PROCEDURE usp_TaoDonHang
+CREATE OR ALTER PROCEDURE sp_TaoDonHang
 	@NgayGiao DATETIME,
 	@TinhTrang NVARCHAR(15),
 	@MaNV INT,
@@ -846,6 +846,7 @@ CREATE OR ALTER PROCEDURE usp_TaoDonHang
 	@CTDH NVARCHAR(MAX)
 AS
 BEGIN TRANSACTION
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED
 	DECLARE @MaDH INT
 
 	-- Khởi tạo đơn hàng
@@ -862,26 +863,32 @@ BEGIN TRANSACTION
         JSON_VALUE(value, '$.MaSP') AS MaSP,
         JSON_VALUE(value, '$.SoLuong') AS SoLuong
     FROM OPENJSON(@CTDH);
+
+	-- Áp dụng khuyến mãi cho mỗi chi tiết đơn hàng nếu có
+	DECLARE @STT INT,
+			@MaSP INT,
+			@SoLuong INT
+
+	DECLARE cur CURSOR LOCAL FOR
+	SELECT STT, MaSP, SoLuong
+	FROM CTDONHANG
+	WHERE MaDH = @MaDH
+	OPEN cur
+
+	FETCH NEXT FROM cur INTO @STT, @MaSP, @SoLuong
+
+	WHILE @@FETCH_STATUS = 0
+	BEGIN
+		EXEC sp_ApDungKhuyenMai @MaDH, @STT, @MaSP, @SoLuong
+		FETCH NEXT FROM cur INTO @STT, @MaSP, @SoLuong
+	END
+
+    -- Cập nhật tổng giá trị đơn hàng
+	EXEC sp_CapNhatTongGiaTriDonHang @MaDH
+	
+	CLOSE cur
+	DEALLOCATE cur
 COMMIT TRANSACTION
-
-EXEC usp_TaoDonHang 
-	NULL,
-	N'Đang xử lý',
-	1,
-	1,
-	N'[
-		{
-			"STT": 1,
-			"MaSP": 1,
-			"SoLuong": 2
-		},
-		{
-			"STT": 2,
-			"MaSP": 5,
-			"SoLuong": 3
-		}
-	]'
-
 
 
 
