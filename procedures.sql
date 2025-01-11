@@ -1,5 +1,36 @@
 
 ----------- BỘ PHẬN CHĂM SÓC KHÁCH HÀNG
+CREATE OR ALTER PROCEDURE sp_TimPhanHang
+	@MaKH int, @MaPH int OUTPUT
+AS
+BEGIN
+	-- Khai báo mốc thời gian bắt đầu tính tiền mua sắm
+	DECLARE @TGBatDau DATE,
+			@TongTien INT
+
+	-- Xác định khoảng thời gian tính tiền mua sắm
+	SELECT @TGBatDau = DATEADD(year, DATEDIFF(year, NgayDangKy, GETDATE()), NgayDangKy)
+	FROM KHACHHANG WITH (NOLOCK)
+	WHERE MaKH = @MaKH
+
+	IF @TGBatDau > GETDATE()
+	BEGIN
+		SET @TGBatDau = DATEADD(year, -1, @TGBatDau)
+	END
+
+	-- Tính tổng số tiền khách hàng đã mua trong khoảng thời gian xác định
+	SELECT @TongTien = ISNULL(SUM(TongPhaiTra), 0)
+	FROM DONHANG
+	WHERE NgayDat >= @TGBatDau AND MaKH = @MaKH
+
+	--  Xác định phân hạng
+	SELECT @MaPH = MaPH
+	FROM PHANHANG WITH (NOLOCK)
+	WHERE @TongTien >= TongMin 
+	AND (@TongTien < TongMax OR TongMax is NULL)
+END
+GO
+
 CREATE OR ALTER PROCEDURE sp_PhanHangKhachHang
 	@MaNV int
 AS
@@ -34,37 +65,6 @@ BEGIN
 	DEALLOCATE cur
 
 	print N'Hoàn tất phân hạng khách hàng'
-END
-GO
-
-CREATE OR ALTER PROCEDURE sp_TimPhanHang
-	@MaKH int, @MaPH int OUTPUT
-AS
-BEGIN
-	-- Khai báo mốc thời gian bắt đầu tính tiền mua sắm
-	DECLARE @TGBatDau DATE,
-			@TongTien INT
-
-	-- Xác định khoảng thời gian tính tiền mua sắm
-	SELECT @TGBatDau = DATEADD(year, DATEDIFF(year, NgayDangKy, GETDATE()), NgayDangKy)
-	FROM KHACHHANG WITH (NOLOCK)
-	WHERE MaKH = @MaKH
-
-	IF @TGBatDau > GETDATE()
-	BEGIN
-		SET @TGBatDau = DATEADD(year, -1, @TGBatDau)
-	END
-
-	-- Tính tổng số tiền khách hàng đã mua trong khoảng thời gian xác định
-	SELECT @TongTien = ISNULL(SUM(TongPhaiTra), 0)
-	FROM DONHANG
-	WHERE NgayDat >= @TGBatDau AND MaKH = @MaKH
-
-	--  Xác định phân hạng
-	SELECT @MaPH = MaPH
-	FROM PHANHANG WITH (NOLOCK)
-	WHERE @TongTien >= TongMin 
-	AND (@TongTien < TongMax OR TongMax is NULL)
 END
 GO
 
