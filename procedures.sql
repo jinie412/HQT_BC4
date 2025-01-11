@@ -74,10 +74,7 @@ AS
 BEGIN
 	DECLARE @MaKH int,
 			@MaPH int,
-			@MaLP int,
-			@tmp int
-
-	SET @tmp = 11
+			@MaLP int
 
 	-- Tìm những khách hàng có sinh nhật trong tháng
 	DECLARE cur CURSOR LOCAL FOR
