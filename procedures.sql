@@ -118,6 +118,7 @@ END
 
 ----------- BỘ PHẬN QUẢN LÝ NGÀNH HÀNG
 ----------------------------- sp_ThemSanPham -------------------------------------
+GO
 CREATE OR ALTER PROCEDURE sp_ThemSanPham
     @MaDM INT,
     @MaNSX INT,
@@ -166,6 +167,7 @@ END;
 GO
 
 ----------------------------- sp_ThemKhuyenMai -------------------------------------
+GO
 CREATE OR ALTER PROCEDURE sp_ThemKhuyenMai
     @NgayBatDau DATETIME,
     @NgayKetThuc DATETIME,
@@ -304,11 +306,11 @@ BEGIN
 	DECLARE @TONG INT, @SLTon INT, @SLToiDa INT
 
 	SELECT @SLToiDa=SLToiDa, @SLTon=SLTonKho
-	FROM SANPHAM 
+	FROM SANPHAM WITH ROWLOCK
 	WHERE MaSP=@MaSP
 
 	SELECT @TONG = SUM(SoLuong)
-	FROM DONDATNSX
+	FROM DONDATNSX WITH (REPEATABLEREAD)
 	WHERE TinhTrang=N'Chưa giao' AND MaSP=@MaSP
 
 	SET @SLDat = @SLToiDa - @SLTon - @TONG
@@ -324,7 +326,7 @@ AS
 BEGIN
 
 	DECLARE @MATT INT
-	SELECT @MATT = ISNULL(MAX(MaDDH)+1,1) FROM DONDATNSX
+	SELECT @MATT = ISNULL(MAX(MaDDH)+1,1) FROM DONDATNSX WITH (XLOCK)
 
 	INSERT INTO DONDATNSX (MaDDH,MaNSX,SoLuong,MaSP,NgayDat,TinhTrang,MaNV)
 	VALUES (@MATT,@MaNSX,@SL,@MaSP,GETDATE(),N'Chưa giao',@MaNV)
@@ -434,13 +436,77 @@ BEGIN
     END
     ELSE
     BEGIN
-        PRINT N'Số lượng giao không hợp lệ hoặc vượt quá số lượng đặt hàng. Đơn hàng không được xử lý.'
+        PRINT N'Số lượng giao không hợp lệ hoặc vượt quá số lượng đặt hàng. Chi tiết đơn hàng không được xử lý.'
     END
 
     COMMIT TRANSACTION
 
 END
+
+----------------------------- sp_TaoDonNhanHang -------------------------------------
 GO
+CREATE OR ALTER PROCEDURE sp_TaoDonNhanHang
+    @MaNSX INT,
+    @MaNV INT,
+    @CTDH NVARCHAR(MAX), -- JSON chứa danh sách chi tiết đơn nhận hàng
+    @MaDNH INT OUTPUT     -- Giá trị trả về là mã đơn nhận hàng vừa tạo
+AS
+BEGIN
+    BEGIN TRANSACTION
+
+    BEGIN TRY
+        -- Tạo một đơn nhận hàng mới
+        INSERT INTO DONNHANHANG (MaNV, NgayNhan, TongTien, MaNSX)
+        VALUES (@MaNV, GETDATE(), 0, @MaNSX);
+
+        SET @MaDNH = SCOPE_IDENTITY();
+
+        
+        DECLARE @SoLuongGiao INT, @DonGia INT, @MaDDH INT;
+
+        -- Duyệt từng phần tử trong JSON
+        DECLARE cur_CTDH CURSOR FOR
+        SELECT 
+            JSON_VALUE(value, '$.SoLuongGiao') AS SoLuongGiao,
+            JSON_VALUE(value, '$.DonGia') AS DonGia,
+            JSON_VALUE(value, '$.MaDDH') AS MaDDH
+        FROM OPENJSON(@CTDH);
+
+        OPEN cur_CTDH;
+        FETCH NEXT FROM cur_CTDH INTO @SoLuongGiao, @DonGia, @MaDDH;
+
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            -- Gọi thủ tục để thêm từng chi tiết đơn nhận hàng
+            EXEC sp_TaoCTDonNhanHang @MaDNH, @SoLuongGiao, @DonGia, @MaDDH;
+
+            FETCH NEXT FROM cur_CTDH INTO @SoLuongGiao, @DonGia, @MaDDH;
+        END
+
+        CLOSE cur_CTDH;
+        DEALLOCATE cur_CTDH;
+
+        -- Tính tổng tiền cho đơn nhận hàng vừa tạo
+        UPDATE DONNHANHANG
+        SET TongTien = (
+            SELECT SUM(ThanhTien)
+            FROM CTDONNHANHANG WITH (HOLDLOCK)
+            WHERE MaDNH = @MaDNH
+        )
+        WHERE MaDNH = @MaDNH;
+
+        COMMIT TRANSACTION;
+        PRINT N'Hoàn thành việc tạo đơn nhập hàng.'
+    END TRY
+
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        PRINT N'Lỗi: Không tạo đơn nhập hàng mới được.';
+        THROW;
+    END CATCH
+END
+GO
+
 
 
 ----------- PROCEDURE PHÁT SINH
@@ -450,23 +516,26 @@ CREATE OR ALTER PROCEDURE sp_TaoChiTietDonHang
 @MaDH INT, @MaSP INT, @SoLuong INT
 AS
 BEGIN
-DECLARE @SLTon INT, @Gia INT, @STT INT, @ThanhTien INT
+    BEGIN TRANSACTION
+    SET TRANSACTION ISOLATION LEVEL SERIALIZABLE 
+    DECLARE @SLTon INT, @Gia INT, @STT INT, @ThanhTien INT
 
-SELECT @SLTon=SLTonKho, @Gia=GiaNiemYet
-FROM SANPHAM WITH (REPEATABLEREAD)
-WHERE MaSP=@MaSP
+    SELECT @SLTon=SLTonKho, @Gia=GiaNiemYet
+    FROM SANPHAM WITH (REPEATABLEREAD)
+    WHERE MaSP=@MaSP
 
-IF @SoLuong <= @SLTon
-BEGIN
-	SELECT @STT = ISNULL(MAX(STT) + 1,1)
-	FROM CTDONHANG
-	WHERE MaDH=@MaDH
+    IF @SoLuong <= @SLTon
+    BEGIN
+        SELECT @STT = ISNULL(MAX(STT) + 1,1)
+        FROM CTDONHANG
+        WHERE MaDH=@MaDH
 
-	SET @ThanhTien = @Gia * @SoLuong
+        SET @ThanhTien = @Gia * @SoLuong
 
-	INSERT INTO CTDONHANG (MaDH, STT, MaSP, SoLuong, ThanhTien) 
-	VALUES (@MaDH, @STT, @MaSP, @SoLuong, @ThanhTien)
-END
+        INSERT INTO CTDONHANG (MaDH, STT, MaSP, SoLuong, ThanhTien) 
+        VALUES (@MaDH, @STT, @MaSP, @SoLuong, @ThanhTien)
+    END
+    COMMIT TRANSACTION
 
 END
 GO
