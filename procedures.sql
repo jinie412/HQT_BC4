@@ -294,6 +294,283 @@ END
 GO
 
 ----------- BỘ PHẬN XỬ LÝ ĐƠN HÀNG
+----------------sp_ApDungKhuyenMai---------------
+
+CREATE OR ALTER PROCEDURE sp_ApDungKhuyenMai
+    @MaDH INT,        -- Mã đơn hàng
+    @STT INT,         -- Số thứ tự
+    @MaSP INT,        -- Mã sản phẩm
+    @SoLuong INT      -- Số lượng
+AS
+BEGIN
+    BEGIN TRANSACTION;
+
+    -- Đặt mức độ cô lập giao dịch là SERIALIZABLE
+    SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+    -- 1. Xác định mã khuyến mãi có thể áp dụng cho sản phẩm
+    DECLARE @MaKhuyenMai INT, @TiLe FLOAT, @SLToiDa INT, @SLDaBan INT;
+    SELECT TOP 1 @MaKhuyenMai = MaKhuyenMai, 
+                 @TiLe = TiLe, 
+                 @SLToiDa = SLToiDa, 
+                 @SLDaBan = SLDaBan
+    FROM KHUYENMAI WITH (ROWLOCK)
+    WHERE TinhTrang = N'Đang diễn ra'
+      AND NgayBatDau <= GETDATE()
+      AND NgayKetThuc >= GETDATE();
+
+    IF @MaKhuyenMai IS NULL
+    BEGIN
+        PRINT 'Không có mã khuyến mãi hợp lệ';
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END
+
+    -- 2. Kiểm tra nếu tồn tại mã khuyến mãi
+    IF @SLDaBan >= @SLToiDa
+    BEGIN
+        PRINT 'Mã khuyến mãi đã hết số lượng áp dụng';
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END
+
+    -- 2.1. Xác định số lượng sản phẩm được giảm giá
+    DECLARE @SoLuongGiam INT, @ThanhTien INT, @TienPhaiTra INT;
+    SET @SoLuongGiam = CASE
+        WHEN @SLDaBan + @SoLuong <= @SLToiDa THEN @SoLuong
+        ELSE @SLToiDa - @SLDaBan
+    END;
+
+    -- 2.2. Cập nhật mã khuyến mãi và số tiền phải trả cho chi tiết đơn hàng
+    SELECT @ThanhTien = GiaNiemYet * @SoLuongGiam
+    FROM SANPHAM
+    WHERE MaSP = @MaSP;
+
+    SET @TienPhaiTra = @ThanhTien * (1 - @TiLe);
+
+    UPDATE CTDONHANG WITH (XLOCK)
+    SET MaKhuyenMai = @MaKhuyenMai,
+        TienPhaiTra = @TienPhaiTra
+    WHERE MaDH = @MaDH AND STT = @STT;
+
+    -- 2.3. Cập nhật lại số lượng đã sử dụng mã khuyến mãi
+    UPDATE KHUYENMAI WITH (XLOCK)
+    SET SLDaBan = SLDaBan + @SoLuongGiam
+    WHERE MaKhuyenMai = @MaKhuyenMai;
+
+    -- 2.4. Kiểm tra và cập nhật tình trạng của mã khuyến mãi nếu hết hiệu lực
+    EXEC sp_KiemTraSoLuongDaBanKM @MaKhuyenMai;
+
+    COMMIT TRANSACTION;
+END;
+GO
+-----------------sp_CapNhatTongGiaTriDonHang---------------
+CREATE OR ALTER PROCEDURE sp_CapNhatTongGiaTriDonHang
+    @MaDH INT -- Mã đơn hàng
+AS
+BEGIN
+    BEGIN TRANSACTION;
+
+    -- Đặt mức độ cô lập giao dịch là REPEATABLE READ
+    SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+    -- 1. Tính tổng thành tiền và tổng tiền phải trả cho tất cả các chi tiết đơn hàng
+    DECLARE @TongThanhTien INT, @TongPhaiTra INT;
+    SELECT @TongThanhTien = SUM(ThanhTien), 
+           @TongPhaiTra = SUM(TienPhaiTra)
+    FROM CTDONHANG WITH (SERIALIZABLE)
+    WHERE MaDH = @MaDH;
+
+    -- 2. Kiểm tra khách hàng có sở hữu phiếu mua hàng hợp lệ không
+    DECLARE @MaKH INT, @TriGia INT = 0, @MaPhieu INT = NULL;
+    SELECT @MaKH = MaKH
+    FROM DONHANG
+    WHERE MaDH = @MaDH;
+
+    IF @MaKH IS NOT NULL
+    BEGIN
+        -- Gọi sp_ApDungPhieuMuaHang để kiểm tra và áp dụng phiếu mua hàng
+        EXEC sp_ApDungPhieuMuaHang @MaKH, @TriGia OUTPUT, @MaPhieu OUTPUT;
+    END
+
+    -- 3. Nếu tồn tại phiếu mua hàng hợp lệ thì áp dụng giảm giá vào tổng tiền phải trả
+    IF @TriGia > 0
+    BEGIN
+        SET @TongPhaiTra = @TongPhaiTra - @TriGia;
+        IF @TongPhaiTra < 0 
+        BEGIN
+            SET @TongPhaiTra = 0; -- Đảm bảo tổng tiền không âm
+        END
+    END
+
+    -- 4. Cập nhật tổng thành tiền, tổng tiền phải trả và mã phiếu mua hàng áp dụng trong bảng Đơn hàng
+    UPDATE DONHANG WITH (XLOCK)
+    SET ThanhTien = @TongThanhTien,
+        TongPhaiTra = @TongPhaiTra,
+        MaPhieu = @MaPhieu
+    WHERE MaDH = @MaDH;
+
+    COMMIT TRANSACTION;
+END;
+GO
+
+----------------sp_XacDinhKMChoSP---------------------------------
+CREATE OR ALTER PROCEDURE sp_XacDinhKMChoSP
+    @MaSP INT,         -- Mã sản phẩm
+    @MaDH INT,         -- Mã đơn hàng
+    @MaKhuyenMai INT OUTPUT, -- Mã khuyến mãi (Output)
+    @SoLuongConLai INT OUTPUT -- Số lượng còn lại của khuyến mãi (Output)
+AS
+BEGIN
+    -- Đặt giá trị mặc định ban đầu
+    SET @MaKhuyenMai = NULL;
+    SET @SoLuongConLai = 0;
+
+    BEGIN TRANSACTION;
+
+    -- 1. Kiểm tra khuyến mãi Combo Sale
+    SELECT TOP 1 @MaKhuyenMai = KM.MaKhuyenMai, 
+                 @SoLuongConLai = (KM.SLToiDa - KM.SLDaBan)
+    FROM KHUYENMAI KM WITH (ROWLOCK)
+    JOIN COMBOSALE CS WITH (ROWLOCK) ON KM.MaKhuyenMai = CS.MaKhuyenMai
+    WHERE KM.TinhTrang = N'Còn hiệu lực'
+      AND (CS.MaSP1 = @MaSP OR CS.MaSP2 = @MaSP)
+    ORDER BY KM.NgayBatDau;
+
+    IF @MaKhuyenMai IS NOT NULL
+    BEGIN
+        -- Khóa dòng khuyến mãi được chọn
+        UPDATE COMBOSALE WITH (XLOCK)
+        SET MaKhuyenMai = MaKhuyenMai
+        WHERE MaKhuyenMai = @MaKhuyenMai;
+
+        RETURN;
+    END
+
+    -- 2. Kiểm tra khuyến mãi Flash Sale
+    SELECT TOP 1 @MaKhuyenMai = KM.MaKhuyenMai, 
+                 @SoLuongConLai = (KM.SLToiDa - KM.SLDaBan)
+    FROM KHUYENMAI KM WITH (ROWLOCK)
+    JOIN FLASHSALE FS WITH (ROWLOCK) ON KM.MaKhuyenMai = FS.MaKhuyenMai
+    WHERE KM.TinhTrang = N'Còn hiệu lực'
+      AND FS.MaSP = @MaSP
+    ORDER BY KM.NgayBatDau;
+
+    IF @MaKhuyenMai IS NOT NULL
+    BEGIN
+        -- Khóa dòng khuyến mãi được chọn
+        UPDATE FLASHSALE WITH (XLOCK)
+        SET MaKhuyenMai = MaKhuyenMai
+        WHERE MaKhuyenMai = @MaKhuyenMai;
+
+        RETURN;
+    END
+
+    -- 3. Kiểm tra khuyến mãi Member Sale
+    DECLARE @MaKH INT;
+    SELECT @MaKH = MaKH
+    FROM DONHANG WITH (ROWLOCK)
+    WHERE MaDH = @MaDH;
+
+    IF @MaKH IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @MaKhuyenMai = KM.MaKhuyenMai, 
+                     @SoLuongConLai = (KM.SLToiDa - KM.SLDaBan)
+        FROM KHUYENMAI KM WITH (ROWLOCK)
+        JOIN MEMBERSALE MS WITH (ROWLOCK) ON KM.MaKhuyenMai = MS.MaKhuyenMai
+        WHERE KM.TinhTrang = N'Còn hiệu lực'
+          AND MS.MaPH = (SELECT MaPH FROM KHACHHANG WHERE MaKH = @MaKH)
+        ORDER BY KM.NgayBatDau;
+
+        IF @MaKhuyenMai IS NOT NULL
+        BEGIN
+            -- Khóa dòng khuyến mãi được chọn
+            UPDATE MEMBERSALE WITH (XLOCK)
+            SET MaKhuyenMai = MaKhuyenMai
+            WHERE MaKhuyenMai = @MaKhuyenMai;
+
+            RETURN;
+        END
+    END
+
+    COMMIT TRANSACTION;
+END;
+GO
+-----------------sp_KiemTraSoLuongDaBanKM----------------------
+CREATE OR ALTER PROCEDURE sp_KiemTraSoLuongDaBanKM
+    @MaKM INT -- Mã khuyến mãi
+AS
+BEGIN
+    BEGIN TRANSACTION;
+
+    -- Đặt khóa RowLock để kiểm tra và cập nhật tình trạng khuyến mãi
+    DECLARE @SLDaBan INT, @SLToiDa INT;
+
+    -- Lấy thông tin số lượng đã bán và số lượng tối đa từ bảng Khuyến mãi
+    SELECT @SLDaBan = SLDaBan, 
+           @SLToiDa = SLToiDa
+    FROM KHUYENMAI WITH (ROWLOCK)
+    WHERE MaKhuyenMai = @MaKM;
+
+    -- Kiểm tra nếu số lượng đã bán >= số lượng tối đa
+    IF @SLDaBan >= @SLToiDa
+    BEGIN
+        -- Cập nhật trạng thái khuyến mãi thành "Kết thúc"
+        UPDATE KHUYENMAI WITH (ROWLOCK)
+        SET TinhTrang = N'Kết thúc'
+        WHERE MaKhuyenMai = @MaKM;
+    END
+
+    COMMIT TRANSACTION;
+END;
+GO
+-----------------sp_ApDungPhieuMuaHang------------
+CREATE OR ALTER PROCEDURE sp_ApDungPhieuMuaHang
+    @MaKH INT,          -- Mã khách hàng
+    @TriGia INT OUTPUT, -- Giá trị phiếu mua hàng (Output)
+    @MaPhieu INT OUTPUT -- Mã phiếu mua hàng (Output)
+AS
+BEGIN
+    BEGIN TRANSACTION;
+
+    -- 1. Kiểm tra MaKH có phiếu mua hàng có trạng thái là "Chưa sử dụng"
+    DECLARE @TrangThai NVARCHAR(15), @HanSuDung DATETIME, @MaLP INT;
+
+    SELECT TOP 1 @MaPhieu = MaPhieu,
+                 @MaLP = MaLP,
+                 @TrangThai = TrangThai,
+                 @HanSuDung = HanSuDung
+    FROM PHIEUMUAHANG WITH (ROWLOCK)
+    WHERE MaKH = @MaKH 
+      AND TrangThai = N'Chưa sử dụng'
+      AND HanSuDung >= GETDATE()
+    ORDER BY NgayTang;
+
+    IF @MaPhieu IS NULL
+    BEGIN
+        -- Nếu không có phiếu hợp lệ, thoát
+        PRINT 'Không có phiếu mua hàng hợp lệ.';
+        SET @TriGia = 0;
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END
+
+    -- 1.1. Lấy giá trị phiếu mua hàng từ bảng LOAIPHIEUMUAHANG
+    SELECT @TriGia = TriGia
+    FROM LOAIPHIEUMUAHANG
+    WHERE MaLP = @MaLP;
+
+    -- 1.2. Cập nhật lại trạng thái của phiếu mua hàng là "Đã sử dụng"
+    UPDATE PHIEUMUAHANG WITH (XLOCK)
+    SET TrangThai = N'Đã sử dụng'
+    WHERE MaPhieu = @MaPhieu;
+
+    -- 1.3. Trả ra trị giá và mã phiếu
+    PRINT 'Phiếu mua hàng đã được áp dụng.';
+
+    COMMIT TRANSACTION;
+END;
+
 ----------- BỘ PHẬN KINH DOANH
 
 ----------- BỘ PHẬN QUẢN LÝ KHO HÀNG
