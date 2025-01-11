@@ -1,8 +1,7 @@
 ﻿USE HQT 
 GO
 
-
-
+--Liet ke san pham theo sl ban
 CREATE OR ALTER PROCEDURE sp_LietKeSanPhamTheoSoLuongBan(
     @NgayBatDau DATETIME,
     @NgayKetThuc DATETIME)
@@ -45,6 +44,7 @@ END;
 
 EXEC sp_LietKeSanPhamTheoSoLuongBan @NgayBatDau = '2024-01-01',@NgayKetThuc = '2025-01-01'
 
+--Tinh tổng khách hàng và doanh thu trong ngày 
 CREATE OR ALTER PROCEDURE sp_TinhTongKhachHang_DoanhThuNgay
     @NgayGiao DATETIME
 AS
@@ -74,3 +74,82 @@ END
 GO
 
 EXEC sp_TinhTongKhachHang_DoanhThuNgay @NgayGiao = '2024-05-06'
+
+CREATE OR ALTER PROCEDURE sp_ThongKeSanPhamTheoNgay
+    @Ngay Date,
+    @MaSP INT,
+    @SoLuongDaBan INT OUTPUT,
+    @SoLuongKhachHang INT OUTPUT
+AS
+BEGIN
+    -- Tính toán số lượng sản phẩm đã bán trong ngày
+    SELECT @SoLuongDaBan = COUNT(*)
+    FROM CTDONHANG dh
+    JOIN DONHANG h ON dh.MaDH = h.MaDH
+    WHERE dh.MaSP = @MaSP AND h.NgayDat = @Ngay;
+
+    -- Tính toán số lượng khách hàng đã mua sản phẩm này trong ngày
+    SELECT @SoLuongKhachHang = COUNT(DISTINCT h.MaKH)
+    FROM CTDONHANG dh
+    JOIN DONHANG h ON dh.MaDH = h.MaDH
+    WHERE dh.MaSP = @MaSP AND h.NgayDat = @Ngay;
+END;
+
+CREATE OR ALTER PROCEDURE sp_ThongKeTatCacSanPhamTheoNgay
+    @Ngay Date
+AS
+BEGIN
+    -- Tạo bảng tạm để lưu kết quả thống kê
+    CREATE TABLE #ThongKeKetQua (
+        MaSP INT,
+        TenSP NVARCHAR(255),  -- Thêm cột tên sản phẩm
+        SoLuongDaBan INT,
+        SoLuongKhachHang INT
+    );
+
+    -- Duyệt qua tất cả các sản phẩm đã bán trong ngày và gọi lại thủ tục sp_ThongKeSanPhamTheoNgay
+    DECLARE @MaSP INT, @TenSP NVARCHAR(255), @SoLuongDaBan INT, @SoLuongKhachHang INT;
+    
+    -- Duyệt qua các sản phẩm trong ngày (lấy MaSP từ bảng CTDONHANG)
+    DECLARE product_cursor CURSOR FOR
+    SELECT DISTINCT dh.MaSP
+    FROM CTDONHANG dh
+    JOIN DONHANG h ON dh.MaDH = h.MaDH
+    WHERE h.NgayDat = @Ngay;
+
+    OPEN product_cursor;
+    FETCH NEXT FROM product_cursor INTO @MaSP;
+
+    -- Lặp lại cho mỗi sản phẩm
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- Lấy tên sản phẩm từ bảng SANPHAM
+        SELECT @TenSP = TenSP
+        FROM SANPHAM
+        WHERE MaSP = @MaSP;
+
+        -- Gọi thủ tục sp_ThongKeSanPhamTheoNgay để lấy thông tin cho sản phẩm hiện tại
+        EXEC sp_ThongKeSanPhamTheoNgay @Ngay, @MaSP, @SoLuongDaBan OUTPUT, @SoLuongKhachHang OUTPUT;
+
+        -- Lưu kết quả vào bảng tạm
+        INSERT INTO #ThongKeKetQua (MaSP, TenSP, SoLuongDaBan, SoLuongKhachHang)
+        VALUES (@MaSP, @TenSP, @SoLuongDaBan, @SoLuongKhachHang);
+
+        -- Lấy sản phẩm tiếp theo
+        FETCH NEXT FROM product_cursor INTO @MaSP;
+    END;
+
+    CLOSE product_cursor;
+    DEALLOCATE product_cursor;
+
+    -- Trả về kết quả thống kê
+    SELECT * FROM #ThongKeKetQua;
+
+    -- Xóa bảng tạm
+    DROP TABLE #ThongKeKetQua;
+END;
+
+exec sp_ThongKeTatCacSanPhamTheoNgay @Ngay = '2024-08-01'
+
+
+
