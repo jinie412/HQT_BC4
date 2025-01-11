@@ -342,7 +342,7 @@ BEGIN
     FROM SANPHAM
     WHERE MaSP = @MaSP;
 
-    SET @TienPhaiTra = @ThanhTien * (1 - @TiLe);
+    SET @TienPhaiTra = @ThanhTien * ((100 - @TiLe)/100);
 
     UPDATE CTDONHANG WITH (XLOCK)
     SET MaKhuyenMai = @MaKhuyenMai,
