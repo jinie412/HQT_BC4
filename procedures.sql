@@ -1,5 +1,121 @@
 
 ----------- BỘ PHẬN CHĂM SÓC KHÁCH HÀNG
+CREATE OR ALTER PROCEDURE sp_PhanHangKhachHang
+	@MaNV int
+AS
+BEGIN
+	DECLARE @MaKH int,
+			@MaPH int
+
+	DECLARE cur CURSOR LOCAL FOR
+	SELECT MaKH
+	FROM KHACHHANG
+
+	OPEN cur
+	FETCH NEXT FROM cur INTO @MaKH
+
+	WHILE @@FETCH_STATUS = 0
+	BEGIN
+		BEGIN TRANSACTION
+			SET TRANSACTION ISOLATION LEVEL SERIALIZABLE 
+			-- Tìm phân hạng
+			EXEC sp_TimPhanHang @MaKH, @MaPH OUTPUT
+
+			-- Cập nhật phân hạng
+			UPDATE KHACHHANG
+			SET MaPH = @MaPH, MaNV = @MaNV
+			WHERE MaKH = @MaKH
+		COMMIT TRANSACTION
+
+		FETCH NEXT FROM cur INTO @MaKH
+	END
+
+	CLOSE cur
+	DEALLOCATE cur
+
+	print N'Hoàn tất phân hạng khách hàng'
+END
+GO
+
+CREATE OR ALTER PROCEDURE sp_TimPhanHang
+	@MaKH int, @MaPH int OUTPUT
+AS
+BEGIN
+	-- Khai báo mốc thời gian bắt đầu tính tiền mua sắm
+	DECLARE @TGBatDau DATE,
+			@TongTien INT
+
+	-- Xác định khoảng thời gian tính tiền mua sắm
+	SELECT @TGBatDau = DATEADD(year, DATEDIFF(year, NgayDangKy, GETDATE()), NgayDangKy)
+	FROM KHACHHANG WITH (NOLOCK)
+	WHERE MaKH = @MaKH
+
+	IF @TGBatDau > GETDATE()
+	BEGIN
+		SET @TGBatDau = DATEADD(year, -1, @TGBatDau)
+	END
+
+	-- Tính tổng số tiền khách hàng đã mua trong khoảng thời gian xác định
+	SELECT @TongTien = ISNULL(SUM(TongPhaiTra), 0)
+	FROM DONHANG
+	WHERE NgayDat >= @TGBatDau AND MaKH = @MaKH
+
+	--  Xác định phân hạng
+	SELECT @MaPH = MaPH
+	FROM PHANHANG WITH (NOLOCK)
+	WHERE @TongTien >= TongMin 
+	AND (@TongTien < TongMax OR TongMax is NULL)
+END
+GO
+
+CREATE OR ALTER PROCEDURE sp_TangPhieuMuaHang
+	@MaNV int
+AS
+BEGIN
+	DECLARE @MaKH int,
+			@MaPH int,
+			@MaLP int,
+			@tmp int
+
+	SET @tmp = 11
+
+	-- Tìm những khách hàng có sinh nhật trong tháng
+	DECLARE cur CURSOR LOCAL FOR
+	SELECT MaKH 
+	FROM KHACHHANG
+	WHERE Month(NgaySinh) = Month(GETDATE())
+
+	OPEN cur
+	FETCH NEXT FROM cur INTO @MaKH
+
+	WHILE @@FETCH_STATUS = 0
+	BEGIN
+		BEGIN TRANSACTION
+		SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+			-- Xác định phân hạng khách hàng
+			SELECT @MaPH = MaPH
+			FROM KHACHHANG WITH (ROWLOCK)
+			WHERE MaKH = @MaKH
+
+			-- Xác định loại phiếu mua hàng tương ứng
+			SELECT @MaLP = MaLP
+			FROM LOAIPHIEUMUAHANG WITH (NOLOCK)
+			WHERE MaPH = @MaPH
+
+			-- Tặng phiếu mua hàng
+			INSERT INTO PHIEUMUAHANG (MaKH, NgayTang, MaLP, MaNV, HanSuDung, TrangThai)
+			VALUES (@MaKH, GETDATE(), @MaLP, @MaNV, EOMONTH(GETDATE()), N'Chưa sử dụng')
+
+		COMMIT TRANSACTION
+		FETCH NEXT FROM cur INTO @MaKH
+	END
+
+	CLOSE cur
+	DEALLOCATE cur
+	
+	print N'Tặng phiếu mua hàng hoàn tất'
+END
+
 ----------- BỘ PHẬN QUẢN LÝ NGÀNH HÀNG
 ----------- BỘ PHẬN XỬ LÝ ĐƠN HÀNG
 ----------- BỘ PHẬN KINH DOANH
@@ -204,7 +320,51 @@ BEGIN
 END
 GO
 
+------------------------ LÁT NHỚ XÓA NHÉ --------------------------
+------------------------ 1 PHAN sp_TaoDonHang --------------------------
+CREATE OR ALTER PROCEDURE usp_TaoDonHang
+	@NgayGiao DATETIME,
+	@TinhTrang NVARCHAR(15),
+	@MaNV INT,
+	@MaKH INT,
+	@CTDH NVARCHAR(MAX)
+AS
+BEGIN TRANSACTION
+	DECLARE @MaDH INT
 
+	-- Khởi tạo đơn hàng
+	INSERT INTO DONHANG(NgayDat, NgayGiao, TinhTrang, MaNV, MaKH)
+	VALUES (GETDATE(), @NgayGiao, @TinhTrang, @MaNV, @MaKH)
+
+	SET @MaDH = SCOPE_IDENTITY();
+
+	-- Lưu các chi tiết đơn hàng
+	INSERT INTO CTDONHANG (MaDH, STT, MaSP, SoLuong)
+	SELECT 
+        @MaDH AS MaDH,
+        JSON_VALUE(value, '$.STT') AS STT,
+        JSON_VALUE(value, '$.MaSP') AS MaSP,
+        JSON_VALUE(value, '$.SoLuong') AS SoLuong
+    FROM OPENJSON(@CTDH);
+COMMIT TRANSACTION
+
+EXEC usp_TaoDonHang 
+	NULL,
+	N'Đang xử lý',
+	1,
+	1,
+	N'[
+		{
+			"STT": 1,
+			"MaSP": 1,
+			"SoLuong": 2
+		},
+		{
+			"STT": 2,
+			"MaSP": 5,
+			"SoLuong": 3
+		}
+	]'
 
 
 
