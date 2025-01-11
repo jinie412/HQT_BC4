@@ -95,16 +95,20 @@ BEGIN
 			-- Xác định phân hạng khách hàng
 			SELECT @MaPH = MaPH
 			FROM KHACHHANG WITH (ROWLOCK)
-			WHERE MaKH = @MaKH
+            WHERE MaKH = @MaKH
 
+			SET @MaLP = NULL
 			-- Xác định loại phiếu mua hàng tương ứng
 			SELECT @MaLP = MaLP
 			FROM LOAIPHIEUMUAHANG WITH (NOLOCK)
-			WHERE MaPH = @MaPH
+			WHERE MaPH = @MaPH and TriGia > 0
 
 			-- Tặng phiếu mua hàng
-			INSERT INTO PHIEUMUAHANG (MaKH, NgayTang, MaLP, MaNV, HanSuDung, TrangThai)
-			VALUES (@MaKH, GETDATE(), @MaLP, @MaNV, EOMONTH(GETDATE()), N'Chưa sử dụng')
+			IF @MaLP IS NOT NULL
+			BEGIN
+				INSERT INTO PHIEUMUAHANG (MaKH, NgayTang, MaLP, MaNV, HanSuDung, TrangThai)
+				VALUES (@MaKH, GETDATE(), @MaLP, @MaNV, EOMONTH(GETDATE()), N'Chưa sử dụng')
+			END
 
 		COMMIT TRANSACTION
 		FETCH NEXT FROM cur INTO @MaKH
